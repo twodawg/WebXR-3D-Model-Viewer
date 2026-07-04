@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRManager } from './xr-manager.js';
 import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js';
@@ -13,10 +14,10 @@ class App {
         this.xrManager = null;
         this.currentModel = null;
         this.currentModelType = null;
-        this.currentSplatUrl = null;
         this.tutorialVisible = false;
         this.tutorialPanel = null;
         this.loader = new GLTFLoader();
+        this.plyLoader = new PLYLoader();
         
         this.init();
     }
@@ -260,7 +261,6 @@ class App {
         const extension = this.getFileExtension(file.name);
 
         if (this.isSplatExtension(extension)) {
-            this.currentSplatUrl = url;
             this.loadSplatModel(url, true);
             return;
         }
@@ -327,13 +327,77 @@ class App {
             this.updateStatus('Gaussian Splat loaded - Enter VR to view immersively');
         } catch (error) {
             console.error('Error loading Gaussian Splat:', error);
-            this.updateStatus('Error loading Gaussian Splat');
+
+            // Fallback: many .ply files are standard point/mesh PLY, not Gaussian splat PLY.
+            const extension = this.getFileExtension(url);
+            if (extension === 'ply') {
+                try {
+                    await this.loadPlyModelFallback(url);
+                    this.updateStatus('PLY loaded (fallback renderer) - Enter VR to view immersively');
+                } catch (fallbackError) {
+                    console.error('Error loading PLY fallback:', fallbackError);
+                    this.updateStatus('Error loading Gaussian Splat/PLY');
+                }
+            } else {
+                this.updateStatus('Error loading Gaussian Splat');
+            }
         } finally {
             if (revokeOnComplete) {
                 URL.revokeObjectURL(url);
-                this.currentSplatUrl = null;
             }
         }
+    }
+
+    loadPlyModelFallback(url) {
+        return new Promise((resolve, reject) => {
+            this.plyLoader.load(
+                url,
+                (geometry) => {
+                    geometry.computeVertexNormals();
+
+                    let object;
+                    if (geometry.hasAttribute('normal')) {
+                        const material = new THREE.MeshStandardMaterial({
+                            color: 0xbec6d2,
+                            metalness: 0.05,
+                            roughness: 0.85
+                        });
+                        object = new THREE.Mesh(geometry, material);
+                    } else {
+                        const material = new THREE.PointsMaterial({
+                            color: 0xbec6d2,
+                            size: 0.01,
+                            sizeAttenuation: true
+                        });
+                        object = new THREE.Points(geometry, material);
+                    }
+
+                    this.onModelLoaded(object, 'ply');
+                    resolve();
+                },
+                undefined,
+                (error) => reject(error)
+            );
+        });
+    }
+
+    fitObjectToViewer(object) {
+        const box = new THREE.Box3().setFromObject(object);
+        if (box.isEmpty()) return;
+
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+
+        object.position.sub(center);
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            const targetSize = 2;
+            const scale = targetSize / maxDim;
+            object.scale.multiplyScalar(scale);
+        }
+
+        object.position.y = 1;
     }
 
     clearCurrentModel() {
@@ -373,24 +437,8 @@ class App {
         this.currentModel = modelType === 'gltf' ? model.scene : model;
         this.currentModelType = modelType;
 
-        if (modelType === 'gltf') {
-            // Center and scale model
-            const box = new THREE.Box3().setFromObject(this.currentModel);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-
-            // Reset position to center
-            this.currentModel.position.sub(center);
-            
-            // Scale to reasonable size (max 2 units)
-            const maxDim = Math.max(size.x, size.y, size.z);
-            if (maxDim > 2) {
-                const scale = 2 / maxDim;
-                this.currentModel.scale.multiplyScalar(scale);
-            }
-
-            // Position at eye level
-            this.currentModel.position.y = 1;
+        if (modelType === 'gltf' || modelType === 'ply') {
+            this.fitObjectToViewer(this.currentModel);
         }
 
         this.scene.add(this.currentModel);
