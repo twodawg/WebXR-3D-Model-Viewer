@@ -331,6 +331,25 @@ class App {
     async loadSuperSplatModel(url, revokeOnComplete = false, sourceExtension = '') {
         this.updateStatus('Loading with SuperSplat viewer...');
 
+        // Uploaded blob URLs lose their original extension, which the embedded
+        // SuperSplat viewer relies on to infer the scene format.
+        if (url.startsWith('blob:') && sourceExtension) {
+            if (sourceExtension === 'ply') {
+                try {
+                    await this.loadPlyModelFallback(url);
+                    this.updateStatus('PLY loaded - Enter VR to view immersively');
+                } finally {
+                    if (revokeOnComplete) {
+                        URL.revokeObjectURL(url);
+                    }
+                }
+                return;
+            }
+
+            await this.loadSplatModel(url, revokeOnComplete, sourceExtension);
+            return;
+        }
+
         try {
             this.clearCurrentModel();
             this.setSplatCanvasVisible(true);
