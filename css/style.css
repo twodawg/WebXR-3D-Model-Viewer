@@ -111,6 +111,23 @@ h1 {
     box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
 }
 
+#flip-button {
+    padding: 10px 24px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.12);
+    color: white;
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+#flip-button:hover {
+    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.2);
+}
+
 #vr-button:hover:not(:disabled), #ar-button:hover:not(:disabled) {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);

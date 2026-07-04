@@ -170,6 +170,12 @@ class App {
         const arButton = document.getElementById('ar-button');
         arButton.addEventListener('click', () => this.toggleVR(true));
 
+        // Flip model orientation
+        const flipButton = document.getElementById('flip-button');
+        if (flipButton) {
+            flipButton.addEventListener('click', () => this.flipCurrentModel());
+        }
+
         // Model selection
         const modelSelect = document.getElementById('model-select');
         modelSelect.addEventListener('change', (e) => {
@@ -246,8 +252,21 @@ class App {
     loadModel(url) {
         const extension = this.getFileExtension(url);
 
+        if (extension === 'ply') {
+            this.updateStatus('Loading PLY model...');
+            this.loadPlyModelFallback(url)
+                .then(() => {
+                    this.updateStatus('PLY loaded - Enter VR to view immersively');
+                })
+                .catch((error) => {
+                    console.error('Error loading PLY model:', error);
+                    this.updateStatus('Error loading PLY model');
+                });
+            return;
+        }
+
         if (this.isSplatExtension(extension)) {
-            this.loadSplatModel(url);
+            this.loadSplatModel(url, false, extension);
             return;
         }
 
@@ -260,8 +279,23 @@ class App {
         const url = URL.createObjectURL(file);
         const extension = this.getFileExtension(file.name);
 
+        if (extension === 'ply') {
+            this.loadPlyModelFallback(url)
+                .then(() => {
+                    this.updateStatus('PLY loaded - Enter VR to view immersively');
+                })
+                .catch((error) => {
+                    console.error('Error loading PLY model:', error);
+                    this.updateStatus('Error loading PLY model');
+                })
+                .finally(() => {
+                    URL.revokeObjectURL(url);
+                });
+            return;
+        }
+
         if (this.isSplatExtension(extension)) {
-            this.loadSplatModel(url, true);
+            this.loadSplatModel(url, true, extension);
             return;
         }
 
@@ -304,8 +338,47 @@ class App {
         );
     }
 
-    async loadSplatModel(url, revokeOnComplete = false) {
+    getSplatSceneFormat(extension) {
+        if (extension === 'ply') return GaussianSplats3D.SceneFormat.Ply;
+        if (extension === 'splat') return GaussianSplats3D.SceneFormat.Splat;
+        if (extension === 'ksplat') return GaussianSplats3D.SceneFormat.KSplat;
+        return undefined;
+    }
+
+    fitSplatToViewer(dropInViewer) {
+        try {
+            const splatMesh = dropInViewer?.viewer?.getSplatMesh?.();
+            if (!splatMesh || typeof splatMesh.computeBoundingBox !== 'function') {
+                return;
+            }
+
+            const box = splatMesh.computeBoundingBox(true);
+            if (!box || box.isEmpty()) {
+                return;
+            }
+
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+
+            dropInViewer.position.sub(center);
+
+            if (maxDim > 0) {
+                const targetSize = 2;
+                const scale = targetSize / maxDim;
+                dropInViewer.scale.multiplyScalar(scale);
+            }
+
+            dropInViewer.position.y = 1;
+        } catch (error) {
+            console.warn('Splat fit skipped:', error);
+        }
+    }
+
+    async loadSplatModel(url, revokeOnComplete = false, sourceExtension = '') {
         this.updateStatus('Loading Gaussian Splat...');
+        const extension = sourceExtension || this.getFileExtension(url);
+        const format = this.getSplatSceneFormat(extension);
 
         try {
             const splatViewer = new GaussianSplats3D.DropInViewer({
@@ -317,6 +390,7 @@ class App {
             await splatViewer.addSplatScenes([
                 {
                     path: url,
+                    format,
                     position: [0, 1, 0],
                     scale: [1, 1, 1],
                     rotation: [0, 0, 0, 1]
@@ -329,7 +403,6 @@ class App {
             console.error('Error loading Gaussian Splat:', error);
 
             // Fallback: many .ply files are standard point/mesh PLY, not Gaussian splat PLY.
-            const extension = this.getFileExtension(url);
             if (extension === 'ply') {
                 try {
                     await this.loadPlyModelFallback(url);
@@ -348,26 +421,42 @@ class App {
         }
     }
 
-    loadPlyModelFallback(url) {
+    async loadPlyModelFallback(url) {
+        try {
+            const gaussianPoints = await this.loadGaussianPlyPointCloud(url);
+            this.onModelLoaded(gaussianPoints, 'ply');
+            return;
+        } catch (error) {
+            console.warn('Gaussian PLY parse fallback failed, trying Three PLYLoader:', error);
+        }
+
         return new Promise((resolve, reject) => {
             this.plyLoader.load(
                 url,
                 (geometry) => {
-                    geometry.computeVertexNormals();
+                    const hasVertexColors = geometry.hasAttribute('color');
+                    const hasNormals = geometry.hasAttribute('normal');
+                    const hasFaces = !!geometry.index;
+
+                    if (!hasNormals && hasFaces) {
+                        geometry.computeVertexNormals();
+                    }
 
                     let object;
-                    if (geometry.hasAttribute('normal')) {
+                    if (hasFaces || hasNormals) {
                         const material = new THREE.MeshStandardMaterial({
-                            color: 0xbec6d2,
+                            color: hasVertexColors ? 0xffffff : 0xbec6d2,
                             metalness: 0.05,
-                            roughness: 0.85
+                            roughness: 0.85,
+                            vertexColors: hasVertexColors
                         });
                         object = new THREE.Mesh(geometry, material);
                     } else {
                         const material = new THREE.PointsMaterial({
-                            color: 0xbec6d2,
+                            color: hasVertexColors ? 0xffffff : 0xbec6d2,
                             size: 0.01,
-                            sizeAttenuation: true
+                            sizeAttenuation: true,
+                            vertexColors: hasVertexColors
                         });
                         object = new THREE.Points(geometry, material);
                     }
@@ -376,9 +465,110 @@ class App {
                     resolve();
                 },
                 undefined,
-                (error) => reject(error)
+                (loaderError) => reject(loaderError)
             );
         });
+    }
+
+    async loadGaussianPlyPointCloud(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch PLY: ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+
+        const marker = 'end_header';
+        const markerBytes = new TextEncoder().encode(marker);
+        let markerIndex = -1;
+        for (let i = 0; i <= uint8.length - markerBytes.length; i++) {
+            let matched = true;
+            for (let j = 0; j < markerBytes.length; j++) {
+                if (uint8[i + j] !== markerBytes[j]) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) {
+                markerIndex = i;
+                break;
+            }
+        }
+
+        if (markerIndex === -1) {
+            throw new Error('PLY header end marker not found');
+        }
+
+        let dataOffset = markerIndex + markerBytes.length;
+        if (uint8[dataOffset] === 13) dataOffset += 1;
+        if (uint8[dataOffset] === 10) dataOffset += 1;
+
+        const headerText = new TextDecoder().decode(uint8.slice(0, markerIndex));
+        const headerLines = headerText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+        let vertexCount = 0;
+        const properties = [];
+        for (const line of headerLines) {
+            if (line.startsWith('element vertex')) {
+                vertexCount = parseInt(line.split(/\s+/)[2], 10) || 0;
+            } else if (line.startsWith('property float')) {
+                properties.push(line.split(/\s+/)[2]);
+            }
+        }
+
+        const idxX = properties.indexOf('x');
+        const idxY = properties.indexOf('y');
+        const idxZ = properties.indexOf('z');
+        const idxR = properties.indexOf('f_dc_0');
+        const idxG = properties.indexOf('f_dc_1');
+        const idxB = properties.indexOf('f_dc_2');
+        const idxOpacity = properties.indexOf('opacity');
+
+        if (vertexCount <= 0 || idxX < 0 || idxY < 0 || idxZ < 0 || idxR < 0 || idxG < 0 || idxB < 0) {
+            throw new Error('Required Gaussian PLY properties missing');
+        }
+
+        const stride = properties.length * 4;
+        const expectedBytes = dataOffset + vertexCount * stride;
+        if (expectedBytes > arrayBuffer.byteLength) {
+            throw new Error('PLY data shorter than expected for header definition');
+        }
+
+        const view = new DataView(arrayBuffer);
+        const positions = new Float32Array(vertexCount * 3);
+        const colors = new Float32Array(vertexCount * 3);
+
+        const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+
+        for (let i = 0; i < vertexCount; i++) {
+            const base = dataOffset + i * stride;
+            positions[i * 3] = view.getFloat32(base + idxX * 4, true);
+            positions[i * 3 + 1] = view.getFloat32(base + idxY * 4, true);
+            positions[i * 3 + 2] = view.getFloat32(base + idxZ * 4, true);
+
+            const r = view.getFloat32(base + idxR * 4, true);
+            const g = view.getFloat32(base + idxG * 4, true);
+            const b = view.getFloat32(base + idxB * 4, true);
+            const opacity = idxOpacity >= 0 ? sigmoid(view.getFloat32(base + idxOpacity * 4, true)) : 1;
+            const brightness = Math.max(opacity, 0.15);
+            colors[i * 3] = sigmoid(r) * brightness;
+            colors[i * 3 + 1] = sigmoid(g) * brightness;
+            colors[i * 3 + 2] = sigmoid(b) * brightness;
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.01,
+            sizeAttenuation: true,
+            vertexColors: true
+        });
+
+        return new THREE.Points(geometry, material);
     }
 
     fitObjectToViewer(object) {
@@ -398,6 +588,17 @@ class App {
         }
 
         object.position.y = 1;
+    }
+
+    flipCurrentModel() {
+        if (!this.currentModel) {
+            this.updateStatus('No model loaded to flip');
+            return;
+        }
+
+        this.currentModel.rotateX(Math.PI);
+        this.currentModel.rotateY(Math.PI);
+        this.updateStatus('Model flipped 180deg on X and Y');
     }
 
     clearCurrentModel() {
@@ -436,6 +637,12 @@ class App {
         // Add new model
         this.currentModel = modelType === 'gltf' ? model.scene : model;
         this.currentModelType = modelType;
+
+        if (modelType === 'splat') {
+            this.fitSplatToViewer(this.currentModel);
+            this.currentModel.rotateX(Math.PI);
+            this.currentModel.rotateY(Math.PI);
+        }
 
         if (modelType === 'gltf' || modelType === 'ply') {
             this.fitObjectToViewer(this.currentModel);
@@ -484,5 +691,8 @@ class App {
 
 // Initialize app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    new App();
+    const app = new App();
+    if (typeof window !== 'undefined') {
+        window.__app = app;
+    }
 });
