@@ -16,6 +16,10 @@ class App {
         this.currentModelType = null;
         this.sceneCanvas = null;
         this.splatViewerFrame = null;
+        this.pendingUploadUrl = null;
+        this.lastSplatSourceUrl = null;
+        this.lastSplatExtension = '';
+        this.handoffKeepUploadUrl = false;
         this.tutorialVisible = false;
         this.tutorialPanel = null;
         this.softPointTexture = null;
@@ -218,8 +222,10 @@ class App {
 
     async toggleVR(usePassthrough = false) {
         if (this.currentModelType === 'supersplat') {
-            this.updateStatus('VR mode is unavailable while SuperSplat rendering is active');
-            return;
+            const xrReady = await this.prepareSuperSplatForXR();
+            if (!xrReady) {
+                return;
+            }
         }
 
         const vrButton = document.getElementById('vr-button');
@@ -264,7 +270,7 @@ class App {
         const extension = this.getFileExtension(url);
 
         if (this.isSplatExtension(extension)) {
-            this.loadSuperSplatModel(url, false);
+            this.loadSuperSplatModel(url, false, extension);
             return;
         }
 
@@ -278,7 +284,7 @@ class App {
         const extension = this.getFileExtension(file.name);
 
         if (this.isSplatExtension(extension)) {
-            this.loadSplatModel(url, true, extension);
+            this.loadSuperSplatModel(url, true, extension);
             return;
         }
 
@@ -322,12 +328,19 @@ class App {
         }
     }
 
-    async loadSuperSplatModel(url, revokeOnComplete = false) {
+    async loadSuperSplatModel(url, revokeOnComplete = false, sourceExtension = '') {
         this.updateStatus('Loading with SuperSplat viewer...');
 
         try {
             this.clearCurrentModel();
             this.setSplatCanvasVisible(true);
+
+            this.lastSplatSourceUrl = url;
+            this.lastSplatExtension = sourceExtension || this.getFileExtension(url);
+
+            if (revokeOnComplete) {
+                this.pendingUploadUrl = url;
+            }
 
             const absoluteUrl = new URL(url, window.location.href).href;
             const viewerUrl = `./supersplat/index.html?content=${encodeURIComponent(absoluteUrl)}&webgl=1&noui=1`;
@@ -342,11 +355,36 @@ class App {
         } catch (error) {
             console.error('SuperSplat viewer load failed, falling back:', error);
             this.setSplatCanvasVisible(false);
-            await this.loadSplatModel(url, false, this.getFileExtension(url));
+            await this.loadSplatModel(url, revokeOnComplete, this.getFileExtension(url));
         } finally {
-            if (revokeOnComplete) {
+            if (revokeOnComplete && this.currentModelType !== 'supersplat') {
                 URL.revokeObjectURL(url);
             }
+        }
+    }
+
+    async prepareSuperSplatForXR() {
+        if (this.currentModelType !== 'supersplat') {
+            return true;
+        }
+
+        if (!this.lastSplatSourceUrl) {
+            this.updateStatus('No splat source available for XR handoff');
+            return false;
+        }
+
+        this.updateStatus('Preparing splat for XR session...');
+        this.handoffKeepUploadUrl = true;
+
+        try {
+            await this.loadSplatModel(this.lastSplatSourceUrl, false, this.lastSplatExtension);
+            return true;
+        } catch (error) {
+            console.error('Failed to prepare SuperSplat for XR:', error);
+            this.updateStatus('Failed to prepare splat for XR');
+            return false;
+        } finally {
+            this.handoffKeepUploadUrl = false;
         }
     }
 
@@ -728,6 +766,11 @@ class App {
 
     clearCurrentModel() {
         if (!this.currentModel && this.currentModelType !== 'supersplat') return;
+
+        if (this.pendingUploadUrl && !this.handoffKeepUploadUrl) {
+            URL.revokeObjectURL(this.pendingUploadUrl);
+            this.pendingUploadUrl = null;
+        }
 
         if (this.currentModelType === 'supersplat') {
             this.disposeSuperSplatViewer();
