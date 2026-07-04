@@ -1,0 +1,22 @@
+<canvas id="c" width="512" height="512"></canvas>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+// Background
+const gradient = ctx.createLinearGradient(0, 0, 512, 512);
+gradient.addColorStop(0, '#667eea');
+gradient.addColorStop(1, '#764ba2');
+ctx.fillStyle = gradient;
+ctx.fillRect(0, 0, 512, 512);
+// 3D cube icon
+ctx.strokeStyle = 'white';
+ctx.lineWidth = 20;
+ctx.beginPath();
+ctx.moveTo(256, 100); ctx.lineTo(400, 180); ctx.lineTo(400, 340); ctx.lineTo(256, 420);
+ctx.lineTo(112, 340); ctx.lineTo(112, 180); ctx.closePath();
+ctx.moveTo(256, 100); ctx.lineTo(256, 260);
+ctx.moveTo(400, 180); ctx.lineTo(256, 260);
+ctx.moveTo(112, 180); ctx.lineTo(256, 260);
+ctx.stroke();
+console.log(c.toDataURL());
+</script>

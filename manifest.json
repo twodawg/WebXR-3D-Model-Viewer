@@ -1,0 +1,27 @@
+{
+    "name": "WebXR 3D Model Viewer",
+    "short_name": "3D Viewer",
+    "description": "View 3D models in immersive VR",
+    "start_url": "/index.html",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#1a1a2e",
+    "theme_color": "#667eea",
+    "icons": [
+        {
+            "src": "icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ],
+    "categories": ["entertainment", "utilities"],
+    "ovr_multi_tab_enabled": false,
+    "ovr_scope_extensions": {
+        "display_modes": ["immersive-vr", "immersive-ar"]
+    }
+}
