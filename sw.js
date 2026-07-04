@@ -1,20 +1,33 @@
-const CACHE_NAME = 'webxr-viewer-v1';
-const urlsToCache = [
-    '/',
-    '/index.html',
-    '/css/style.css',
-    '/js/app.js',
-    '/js/xr-manager.js'
+const CACHE_NAME = 'webxr-viewer-v2';
+const assetsToCache = [
+    './',
+    './index.html',
+    './manifest.json',
+    './css/style.css',
+    './js/app.js',
+    './js/xr-manager.js'
 ];
 
 // Install service worker and cache files
 self.addEventListener('install', (event) => {
     event.waitUntil(
-        caches.open(CACHE_NAME)
-            .then((cache) => {
-                console.log('Opened cache');
-                return cache.addAll(urlsToCache);
-            })
+        (async () => {
+            const cache = await caches.open(CACHE_NAME);
+            const requests = assetsToCache.map((asset) => new Request(new URL(asset, self.registration.scope).toString()));
+
+            // Cache each asset individually so one bad response does not abort installation.
+            await Promise.all(
+                requests.map(async (request) => {
+                    try {
+                        await cache.add(request);
+                    } catch (error) {
+                        console.warn('ServiceWorker cache add failed:', request.url, error);
+                    }
+                })
+            );
+
+            await self.skipWaiting();
+        })()
     );
 });
 
@@ -32,14 +45,17 @@ self.addEventListener('fetch', (event) => {
 // Clean up old caches
 self.addEventListener('activate', (event) => {
     event.waitUntil(
-        caches.keys().then((cacheNames) => {
-            return Promise.all(
+        (async () => {
+            const cacheNames = await caches.keys();
+            await Promise.all(
                 cacheNames.map((cacheName) => {
                     if (cacheName !== CACHE_NAME) {
                         return caches.delete(cacheName);
                     }
+                    return Promise.resolve();
                 })
             );
-        })
+            await self.clients.claim();
+        })()
     );
 });
