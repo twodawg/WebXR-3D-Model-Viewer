@@ -334,18 +334,6 @@ class App {
         // Uploaded blob URLs lose their original extension, which the embedded
         // SuperSplat viewer relies on to infer the scene format.
         if (url.startsWith('blob:') && sourceExtension) {
-            if (sourceExtension === 'ply') {
-                try {
-                    await this.loadPlyModelFallback(url);
-                    this.updateStatus('PLY loaded - Enter VR to view immersively');
-                } finally {
-                    if (revokeOnComplete) {
-                        URL.revokeObjectURL(url);
-                    }
-                }
-                return;
-            }
-
             await this.loadSplatModel(url, revokeOnComplete, sourceExtension);
             return;
         }
@@ -470,7 +458,9 @@ class App {
 
         try {
             const splatViewer = new GaussianSplats3D.DropInViewer({
-                gpuAcceleratedSort: true,
+                // gpuAcceleratedSort requires sharedMemoryForWorkers (needs COOP/COEP
+                // headers); with it wrongly enabled the sort returns 0 renderable splats.
+                gpuAcceleratedSort: false,
                 sharedMemoryForWorkers: false,
                 useBuiltInControls: false
             });
@@ -677,7 +667,7 @@ class App {
                 void main() {
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     float depth = max(0.1, -mvPosition.z);
-                    gl_PointSize = clamp(uPointSize * (1.0 / depth), 1.0, 4.0);
+                    gl_PointSize = clamp(uPointSize * (3.0 / depth), 2.0, 32.0);
                     gl_Position = projectionMatrix * mvPosition;
                     vColor = color;
                     vAlpha = alpha;
