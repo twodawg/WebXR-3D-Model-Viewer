@@ -14,8 +14,11 @@ class App {
         this.xrManager = null;
         this.currentModel = null;
         this.currentModelType = null;
+        this.sceneCanvas = null;
+        this.splatViewerFrame = null;
         this.tutorialVisible = false;
         this.tutorialPanel = null;
+        this.softPointTexture = null;
         this.loader = new GLTFLoader();
         this.plyLoader = new PLYLoader();
         
@@ -62,7 +65,9 @@ class App {
         this.camera.position.set(0, 1.6, 3);
 
         // Renderer (alpha: true enables passthrough on Quest 3)
-        const canvas = document.getElementById('scene');
+        this.sceneCanvas = document.getElementById('scene');
+        this.splatViewerFrame = document.getElementById('splat-viewer-frame');
+        const canvas = this.sceneCanvas;
         this.renderer = new THREE.WebGLRenderer({
             canvas,
             antialias: true,
@@ -72,6 +77,7 @@ class App {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.xr.enabled = true;
+        this.setSplatCanvasVisible(false);
 
         // Floor grid (only visible outside VR)
         this.gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
@@ -211,6 +217,11 @@ class App {
     }
 
     async toggleVR(usePassthrough = false) {
+        if (this.currentModelType === 'supersplat') {
+            this.updateStatus('VR mode is unavailable while SuperSplat rendering is active');
+            return;
+        }
+
         const vrButton = document.getElementById('vr-button');
         const arButton = document.getElementById('ar-button');
         
@@ -252,21 +263,8 @@ class App {
     loadModel(url) {
         const extension = this.getFileExtension(url);
 
-        if (extension === 'ply') {
-            this.updateStatus('Loading PLY model...');
-            this.loadPlyModelFallback(url)
-                .then(() => {
-                    this.updateStatus('PLY loaded - Enter VR to view immersively');
-                })
-                .catch((error) => {
-                    console.error('Error loading PLY model:', error);
-                    this.updateStatus('Error loading PLY model');
-                });
-            return;
-        }
-
         if (this.isSplatExtension(extension)) {
-            this.loadSplatModel(url, false, extension);
+            this.loadSuperSplatModel(url, false);
             return;
         }
 
@@ -278,21 +276,6 @@ class App {
         
         const url = URL.createObjectURL(file);
         const extension = this.getFileExtension(file.name);
-
-        if (extension === 'ply') {
-            this.loadPlyModelFallback(url)
-                .then(() => {
-                    this.updateStatus('PLY loaded - Enter VR to view immersively');
-                })
-                .catch((error) => {
-                    console.error('Error loading PLY model:', error);
-                    this.updateStatus('Error loading PLY model');
-                })
-                .finally(() => {
-                    URL.revokeObjectURL(url);
-                });
-            return;
-        }
 
         if (this.isSplatExtension(extension)) {
             this.loadSplatModel(url, true, extension);
@@ -317,6 +300,54 @@ class App {
                 URL.revokeObjectURL(url);
             }
         );
+    }
+
+    setSplatCanvasVisible(visible) {
+        if (!this.sceneCanvas || !this.splatViewerFrame) return;
+
+        this.splatViewerFrame.style.display = visible ? 'block' : 'none';
+        this.sceneCanvas.style.display = visible ? 'none' : 'block';
+        if (this.controls) {
+            this.controls.enabled = !visible;
+        }
+        if (this.gridHelper && this.renderer) {
+            this.gridHelper.visible = !visible && !this.renderer.xr.isPresenting;
+        }
+    }
+
+    disposeSuperSplatViewer() {
+        if (!this.splatViewerFrame) return;
+        if (this.splatViewerFrame.src && this.splatViewerFrame.src !== 'about:blank') {
+            this.splatViewerFrame.src = 'about:blank';
+        }
+    }
+
+    async loadSuperSplatModel(url, revokeOnComplete = false) {
+        this.updateStatus('Loading with SuperSplat viewer...');
+
+        try {
+            this.clearCurrentModel();
+            this.setSplatCanvasVisible(true);
+
+            const absoluteUrl = new URL(url, window.location.href).href;
+            const viewerUrl = `./supersplat/index.html?content=${encodeURIComponent(absoluteUrl)}&webgl=1&noui=1`;
+            this.splatViewerFrame.src = viewerUrl;
+
+            this.currentModel = { type: 'supersplat-embed' };
+            this.currentModelType = 'supersplat';
+            if (this.placeholderCube) {
+                this.placeholderCube.visible = false;
+            }
+            this.updateStatus('SuperSplat loaded - visual quality mode active');
+        } catch (error) {
+            console.error('SuperSplat viewer load failed, falling back:', error);
+            this.setSplatCanvasVisible(false);
+            await this.loadSplatModel(url, false, this.getFileExtension(url));
+        } finally {
+            if (revokeOnComplete) {
+                URL.revokeObjectURL(url);
+            }
+        }
     }
 
     loadGltfModel(url) {
@@ -452,13 +483,19 @@ class App {
                         });
                         object = new THREE.Mesh(geometry, material);
                     } else {
-                        const material = new THREE.PointsMaterial({
-                            color: hasVertexColors ? 0xffffff : 0xbec6d2,
-                            size: 0.01,
-                            sizeAttenuation: true,
-                            vertexColors: hasVertexColors
-                        });
-                        object = new THREE.Points(geometry, material);
+                        if (hasVertexColors) {
+                            if (!geometry.hasAttribute('alpha')) {
+                                const count = geometry.attributes.position.count;
+                                const alpha = new Float32Array(count);
+                                alpha.fill(0.7);
+                                geometry.setAttribute('alpha', new THREE.BufferAttribute(alpha, 1));
+                            }
+                            const material = this.createSplatLikePointMaterial(8.0);
+                            object = new THREE.Points(geometry, material);
+                        } else {
+                            const material = this.createSoftPointMaterial(false, 0.012);
+                            object = new THREE.Points(geometry, material);
+                        }
                     }
 
                     this.onModelLoaded(object, 'ply');
@@ -538,6 +575,7 @@ class App {
         const view = new DataView(arrayBuffer);
         const positions = new Float32Array(vertexCount * 3);
         const colors = new Float32Array(vertexCount * 3);
+        const alphas = new Float32Array(vertexCount);
 
         const sigmoid = (x) => 1 / (1 + Math.exp(-x));
 
@@ -555,20 +593,102 @@ class App {
             colors[i * 3] = sigmoid(r) * brightness;
             colors[i * 3 + 1] = sigmoid(g) * brightness;
             colors[i * 3 + 2] = sigmoid(b) * brightness;
+            alphas[i] = Math.max(opacity, 0.08);
         }
 
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
 
-        const material = new THREE.PointsMaterial({
-            color: 0xffffff,
-            size: 0.01,
-            sizeAttenuation: true,
-            vertexColors: true
-        });
+        const material = this.createSplatLikePointMaterial(8.0);
 
         return new THREE.Points(geometry, material);
+    }
+
+    createSplatLikePointMaterial(pointSizePx = 20.0) {
+        return new THREE.ShaderMaterial({
+            uniforms: {
+                uPointSize: { value: pointSizePx }
+            },
+            vertexShader: `
+                uniform float uPointSize;
+                attribute float alpha;
+                varying vec3 vColor;
+                varying float vAlpha;
+
+                void main() {
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    float depth = max(0.1, -mvPosition.z);
+                    gl_PointSize = clamp(uPointSize * (1.0 / depth), 1.0, 4.0);
+                    gl_Position = projectionMatrix * mvPosition;
+                    vColor = color;
+                    vAlpha = alpha;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                varying float vAlpha;
+
+                void main() {
+                    vec2 p = gl_PointCoord * 2.0 - 1.0;
+                    float r2 = dot(p, p);
+                    if (r2 > 1.0) discard;
+
+                    float falloff = exp(-6.0 * r2);
+                    float alpha = min(1.0, vAlpha * 0.7 * falloff);
+                    gl_FragColor = vec4(vColor, alpha);
+                }
+            `,
+            vertexColors: true,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
+    }
+
+    createSoftPointTexture() {
+        const size = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+
+        const ctx = canvas.getContext('2d');
+        const center = size / 2;
+        const radius = size / 2;
+        const gradient = ctx.createRadialGradient(center, center, 0, center, center, radius);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.55, 'rgba(255, 255, 255, 0.85)');
+        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        return texture;
+    }
+
+    createSoftPointMaterial(vertexColors = true, size = 0.01) {
+        if (!this.softPointTexture) {
+            this.softPointTexture = this.createSoftPointTexture();
+        }
+
+        return new THREE.PointsMaterial({
+            color: vertexColors ? 0xffffff : 0xbec6d2,
+            size,
+            sizeAttenuation: true,
+            vertexColors,
+            map: this.softPointTexture,
+            transparent: true,
+            alphaTest: 0.05,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
     }
 
     fitObjectToViewer(object) {
@@ -596,13 +716,28 @@ class App {
             return;
         }
 
+        if (this.currentModelType === 'supersplat') {
+            this.updateStatus('Flip is not available in SuperSplat viewer mode');
+            return;
+        }
+
         this.currentModel.rotateX(Math.PI);
         this.currentModel.rotateY(Math.PI);
         this.updateStatus('Model flipped 180deg on X and Y');
     }
 
     clearCurrentModel() {
-        if (!this.currentModel) return;
+        if (!this.currentModel && this.currentModelType !== 'supersplat') return;
+
+        if (this.currentModelType === 'supersplat') {
+            this.disposeSuperSplatViewer();
+            this.setSplatCanvasVisible(false);
+        }
+
+        if (!this.currentModel) {
+            this.currentModelType = null;
+            return;
+        }
 
         this.scene.remove(this.currentModel);
 
@@ -646,6 +781,11 @@ class App {
 
         if (modelType === 'gltf' || modelType === 'ply') {
             this.fitObjectToViewer(this.currentModel);
+        }
+
+        if (modelType === 'ply') {
+            this.currentModel.rotateX(Math.PI);
+            this.currentModel.rotateY(Math.PI);
         }
 
         this.scene.add(this.currentModel);

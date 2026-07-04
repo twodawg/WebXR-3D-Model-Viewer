@@ -12,6 +12,7 @@
 <body>
     <div id="container">
         <canvas id="scene"></canvas>
+        <iframe id="splat-viewer-frame" title="SuperSplat Viewer" allow="fullscreen; xr-spatial-tracking"></iframe>
         <div id="ui-overlay">
             <h1>WebXR 3D Model Viewer</h1>
             <div id="model-controls">
@@ -25,7 +26,6 @@
             </div>
             <button id="vr-button" disabled>VR Not Available</button>
             <button id="ar-button" disabled>Passthrough Not Available</button>
-            <button id="flip-button">Flip 180deg</button>
             <p id="status">Loading...</p>
         </div>
         <div id="vr-tutorial" class="tutorial-hidden" aria-live="polite">

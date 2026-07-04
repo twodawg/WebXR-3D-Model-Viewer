@@ -19,10 +19,21 @@ body {
     height: 100%;
 }
 
-#scene {
-    display: block;
+#scene,
+#splat-viewer-frame {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
+}
+
+#scene {
+    display: block;
+}
+
+#splat-viewer-frame {
+    display: none;
+    border: 0;
 }
 
 #ui-overlay {
