@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRManager } from './xr-manager.js';
+import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js';
 
 class App {
     constructor() {
@@ -11,6 +12,8 @@ class App {
         this.controls = null;
         this.xrManager = null;
         this.currentModel = null;
+        this.currentModelType = null;
+        this.currentSplatUrl = null;
         this.tutorialVisible = false;
         this.tutorialPanel = null;
         this.loader = new GLTFLoader();
@@ -28,7 +31,7 @@ class App {
         this.registerServiceWorker();
         this.animate();
         
-        this.updateStatus('Ready - Select a model or enter VR');
+        this.updateStatus('Ready - Load a GLB/GLTF/SPLAT model or enter VR');
     }
 
     registerServiceWorker() {
@@ -240,32 +243,32 @@ class App {
     }
 
     loadModel(url) {
-        this.updateStatus('Loading model...');
-        
-        this.loader.load(
-            url,
-            (gltf) => {
-                this.onModelLoaded(gltf);
-            },
-            (progress) => {
-                const percent = (progress.loaded / progress.total * 100).toFixed(0);
-                this.updateStatus(`Loading: ${percent}%`);
-            },
-            (error) => {
-                console.error('Error loading model:', error);
-                this.updateStatus('Error loading model');
-            }
-        );
+        const extension = this.getFileExtension(url);
+
+        if (this.isSplatExtension(extension)) {
+            this.loadSplatModel(url);
+            return;
+        }
+
+        this.loadGltfModel(url);
     }
 
     loadModelFromFile(file) {
         this.updateStatus('Loading uploaded model...');
         
         const url = URL.createObjectURL(file);
+        const extension = this.getFileExtension(file.name);
+
+        if (this.isSplatExtension(extension)) {
+            this.currentSplatUrl = url;
+            this.loadSplatModel(url, true);
+            return;
+        }
+
         this.loader.load(
             url,
             (gltf) => {
-                this.onModelLoaded(gltf);
+                this.onModelLoaded(gltf, 'gltf');
                 URL.revokeObjectURL(url);
             },
             (progress) => {
@@ -282,11 +285,84 @@ class App {
         );
     }
 
-    onModelLoaded(gltf) {
-        // Remove previous model
-        if (this.currentModel) {
-            this.scene.remove(this.currentModel);
+    loadGltfModel(url) {
+        this.updateStatus('Loading model...');
+
+        this.loader.load(
+            url,
+            (gltf) => {
+                this.onModelLoaded(gltf, 'gltf');
+            },
+            (progress) => {
+                const percent = (progress.loaded / progress.total * 100).toFixed(0);
+                this.updateStatus(`Loading: ${percent}%`);
+            },
+            (error) => {
+                console.error('Error loading model:', error);
+                this.updateStatus('Error loading model');
+            }
+        );
+    }
+
+    async loadSplatModel(url, revokeOnComplete = false) {
+        this.updateStatus('Loading Gaussian Splat...');
+
+        try {
+            const splatViewer = new GaussianSplats3D.DropInViewer({
+                gpuAcceleratedSort: true,
+                sharedMemoryForWorkers: false,
+                useBuiltInControls: false
+            });
+
+            await splatViewer.addSplatScenes([
+                {
+                    path: url,
+                    position: [0, 1, 0],
+                    scale: [1, 1, 1],
+                    rotation: [0, 0, 0, 1]
+                }
+            ]);
+
+            this.onModelLoaded(splatViewer, 'splat');
+            this.updateStatus('Gaussian Splat loaded - Enter VR to view immersively');
+        } catch (error) {
+            console.error('Error loading Gaussian Splat:', error);
+            this.updateStatus('Error loading Gaussian Splat');
+        } finally {
+            if (revokeOnComplete) {
+                URL.revokeObjectURL(url);
+                this.currentSplatUrl = null;
+            }
         }
+    }
+
+    clearCurrentModel() {
+        if (!this.currentModel) return;
+
+        this.scene.remove(this.currentModel);
+
+        if (this.currentModelType === 'splat' && typeof this.currentModel.dispose === 'function') {
+            this.currentModel.dispose();
+        }
+
+        this.currentModel = null;
+        this.currentModelType = null;
+    }
+
+    getFileExtension(path) {
+        if (!path) return '';
+        const cleanPath = path.split('?')[0].split('#')[0];
+        const dotIndex = cleanPath.lastIndexOf('.');
+        if (dotIndex === -1) return '';
+        return cleanPath.slice(dotIndex + 1).toLowerCase();
+    }
+
+    isSplatExtension(extension) {
+        return extension === 'splat' || extension === 'ksplat' || extension === 'ply';
+    }
+
+    onModelLoaded(model, modelType = 'gltf') {
+        this.clearCurrentModel();
 
         // Hide placeholder
         if (this.placeholderCube) {
@@ -294,28 +370,33 @@ class App {
         }
 
         // Add new model
-        this.currentModel = gltf.scene;
+        this.currentModel = modelType === 'gltf' ? model.scene : model;
+        this.currentModelType = modelType;
 
-        // Center and scale model
-        const box = new THREE.Box3().setFromObject(this.currentModel);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
+        if (modelType === 'gltf') {
+            // Center and scale model
+            const box = new THREE.Box3().setFromObject(this.currentModel);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
 
-        // Reset position to center
-        this.currentModel.position.sub(center);
-        
-        // Scale to reasonable size (max 2 units)
-        const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 2) {
-            const scale = 2 / maxDim;
-            this.currentModel.scale.multiplyScalar(scale);
+            // Reset position to center
+            this.currentModel.position.sub(center);
+            
+            // Scale to reasonable size (max 2 units)
+            const maxDim = Math.max(size.x, size.y, size.z);
+            if (maxDim > 2) {
+                const scale = 2 / maxDim;
+                this.currentModel.scale.multiplyScalar(scale);
+            }
+
+            // Position at eye level
+            this.currentModel.position.y = 1;
         }
 
-        // Position at eye level
-        this.currentModel.position.y = 1;
-
         this.scene.add(this.currentModel);
-        this.updateStatus('Model loaded - Enter VR to view immersively');
+        if (modelType === 'gltf') {
+            this.updateStatus('Model loaded - Enter VR to view immersively');
+        }
     }
 
     updateStatus(message) {

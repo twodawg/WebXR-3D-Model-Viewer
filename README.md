@@ -5,7 +5,7 @@ A static website for viewing 3D models in immersive VR mode using the WebXR API,
 ## Features
 
 - 🥽 Immersive VR mode via WebXR API
-- 📦 Support for GLTF/GLB 3D model formats
+- 📦 Support for GLTF/GLB and Gaussian Splat formats (`.splat`, `.ksplat`, `.ply`)
 - 🎮 Meta Quest 3 controller support with visual feedback
 - 📁 Load models from file selector or drag-and-drop
 - 🖱️ OrbitControls for non-VR viewing
@@ -48,7 +48,7 @@ WebXR/
 ├── js/
 │   ├── app.js          # Main application logic
 │   └── xr-manager.js   # WebXR session management
-├── models/             # Place your GLTF/GLB models here
+├── models/             # Place your GLTF/GLB or Gaussian Splat files here
 └── README.md
 ```
 
@@ -57,13 +57,16 @@ WebXR/
 ### Loading Models
 
 1. **Dropdown Selection:** Choose from pre-configured models in the dropdown
-2. **File Upload:** Click "Upload Model" to load a local `.glb` or `.gltf` file
+2. **File Upload:** Click "Upload Model" to load a local `.glb`, `.gltf`, `.splat`, `.ksplat`, or `.ply` file
 
 ### VR Controls (Meta Quest 3)
 
-- **Trigger:** Highlights the controller ray (green)
-- **Grip:** Reserved for future grab interactions
-- **Thumbstick:** Standard locomotion (coming soon)
+- **Left Thumbstick:** Move around the scene
+- **Right Thumbstick X/Y:** Rotate model and move model up/down
+- **Press either thumbstick:** Show/hide tutorial panel
+- **A/X button:** Toggle passthrough mode
+- **B/Y button:** Exit VR session
+- **Pinch Zoom:** Hold grip on both controllers, then move hands apart to zoom in and move hands together to zoom out
 
 ### Non-VR Controls
 
@@ -73,12 +76,13 @@ WebXR/
 
 ## Adding Models
 
-Place your GLTF/GLB files in the `models/` directory, then add them to the dropdown in `index.html`:
+Place your model files in the `models/` directory, then add them to the dropdown in `index.html`:
 
 ```html
 <select id="model-select">
     <option value="">-- Choose a model --</option>
     <option value="models/your-model.glb">Your Model Name</option>
+    <option value="models/your-scene.splat">Your Gaussian Splat</option>
 </select>
 ```
 
