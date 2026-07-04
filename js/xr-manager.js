@@ -22,6 +22,16 @@ export class XRManager {
         
         // Rotation settings - smooth rotation
         this.rotateSpeed = 0.035;
+
+        // Two-controller pinch zoom settings
+        this.isPinchZoomActive = false;
+        this.pinchStartDistance = 0;
+        this.pinchStartScale = 1;
+        this.minModelScale = 0.1;
+        this.maxModelScale = 8;
+
+        // Tutorial panel toggle state
+        this.tutorialTogglePressed = false;
         
         // Passthrough state
         this.passthroughEnabled = false;
@@ -203,6 +213,12 @@ export class XRManager {
         // Handle controller input
         const inputSources = this.renderer.xr.getSession()?.inputSources;
         if (!inputSources) return;
+
+        let leftController = null;
+        let rightController = null;
+        let leftSqueezing = false;
+        let rightSqueezing = false;
+        let thumbstickPressDetected = false;
         
         for (let i = 0; i < inputSources.length; i++) {
             const inputSource = inputSources[i];
@@ -212,6 +228,14 @@ export class XRManager {
             const gamepad = inputSource.gamepad;
             const isRightHand = inputSource.handedness === 'right';
             const isLeftHand = inputSource.handedness === 'left';
+
+            if (isLeftHand && this.controllers[i]) {
+                leftController = this.controllers[i];
+                leftSqueezing = !!gamepad.buttons[1]?.pressed;
+            } else if (isRightHand && this.controllers[i]) {
+                rightController = this.controllers[i];
+                rightSqueezing = !!gamepad.buttons[1]?.pressed;
+            }
             
             // Thumbstick axes: [2] = X (left/right), [3] = Y (forward/back)
             const thumbstickX = gamepad.axes[2] || 0;
@@ -223,6 +247,11 @@ export class XRManager {
             // Button indices for Quest 3:
             // 0 = trigger, 1 = squeeze/grip, 2 = unused, 3 = thumbstick press
             // 4 = A/X button, 5 = B/Y button
+
+            // Either thumbstick press = Toggle tutorial panel
+            if (gamepad.buttons[3]?.pressed) {
+                thumbstickPressDetected = true;
+            }
             
             // B button (right) or Y button (left) = Exit VR
             if (gamepad.buttons[5]?.pressed) {
@@ -279,6 +308,40 @@ export class XRManager {
                     this.cameraRig.position.add(cameraDirection.multiplyScalar(-moveZ));
                 }
             }
+        }
+
+        if (thumbstickPressDetected) {
+            if (!this.tutorialTogglePressed) {
+                this.tutorialTogglePressed = true;
+                if (this.app?.toggleTutorialUI) {
+                    this.app.toggleTutorialUI();
+                }
+            }
+        } else {
+            this.tutorialTogglePressed = false;
+        }
+
+        // Pinch zoom: hold squeeze on both controllers and move hands apart/together.
+        const currentModel = this.app?.currentModel;
+        if (currentModel && leftController && rightController && leftSqueezing && rightSqueezing) {
+            const leftPos = leftController.getWorldPosition(new THREE.Vector3());
+            const rightPos = rightController.getWorldPosition(new THREE.Vector3());
+            const controllerDistance = leftPos.distanceTo(rightPos);
+
+            if (!this.isPinchZoomActive) {
+                this.isPinchZoomActive = true;
+                this.pinchStartDistance = Math.max(controllerDistance, 0.001);
+                this.pinchStartScale = currentModel.scale.x;
+            } else {
+                const nextScale = THREE.MathUtils.clamp(
+                    this.pinchStartScale * (controllerDistance / this.pinchStartDistance),
+                    this.minModelScale,
+                    this.maxModelScale
+                );
+                currentModel.scale.setScalar(nextScale);
+            }
+        } else {
+            this.isPinchZoomActive = false;
         }
     }
 }

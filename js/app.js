@@ -11,6 +11,8 @@ class App {
         this.controls = null;
         this.xrManager = null;
         this.currentModel = null;
+        this.tutorialVisible = false;
+        this.tutorialPanel = null;
         this.loader = new GLTFLoader();
         
         this.init();
@@ -21,6 +23,7 @@ class App {
         this.setupLighting();
         this.setupControls();
         this.setupXR();
+        this.setupTutorialUI();
         this.setupEventListeners();
         this.registerServiceWorker();
         this.animate();
@@ -181,6 +184,22 @@ class App {
         });
     }
 
+    setupTutorialUI() {
+        this.tutorialPanel = document.getElementById('vr-tutorial');
+        this.setTutorialVisible(false);
+    }
+
+    setTutorialVisible(visible) {
+        if (!this.tutorialPanel) return;
+        this.tutorialVisible = visible;
+        this.tutorialPanel.classList.toggle('tutorial-visible', visible);
+        this.tutorialPanel.classList.toggle('tutorial-hidden', !visible);
+    }
+
+    toggleTutorialUI() {
+        this.setTutorialVisible(!this.tutorialVisible);
+    }
+
     async toggleVR(usePassthrough = false) {
         const vrButton = document.getElementById('vr-button');
         const arButton = document.getElementById('ar-button');
@@ -200,6 +219,7 @@ class App {
                     arButton.textContent = 'Enter Passthrough';
                 }
                 document.body.classList.add('vr-active');
+                this.setTutorialVisible(true);
             } catch (error) {
                 console.error('Failed to start XR session:', error);
                 this.updateStatus('Failed to start: ' + error.message);
@@ -215,6 +235,7 @@ class App {
         document.body.classList.remove('vr-active');
         // Show grid again
         this.gridHelper.visible = true;
+        this.setTutorialVisible(false);
         this.updateStatus('Session ended - Ready');
     }
 
